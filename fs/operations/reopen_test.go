@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"context"
 	"io"
 	"io/ioutil"
 	"testing"
@@ -29,8 +30,8 @@ type reOpenTestObject struct {
 // Open opens the file for read.  Call Close() on the returned io.ReadCloser
 //
 // This will break after reading the number of bytes in breaks
-func (o *reOpenTestObject) Open(options ...fs.OpenOption) (io.ReadCloser, error) {
-	rc, err := o.Object.Open(options...)
+func (o *reOpenTestObject) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
+	rc, err := o.Object.Open(ctx, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,7 @@ func testReOpen(breaks []int64, maxRetries int) (io.ReadCloser, error) {
 		breaks: breaks,
 	}
 	hashOption := &fs.HashesOption{Hashes: hash.NewHashSet(hash.MD5)}
-	return newReOpen(src, hashOption, maxRetries)
+	return newReOpen(context.Background(), src, hashOption, maxRetries)
 }
 
 func TestReOpenBasics(t *testing.T) {

@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"context"
 	"path"
 	"time"
 
@@ -75,7 +76,7 @@ type ListJSONOpt struct {
 }
 
 // ListJSON lists fsrc using the options in opt calling callback for each item
-func ListJSON(fsrc fs.Fs, remote string, opt *ListJSONOpt, callback func(*ListJSONItem) error) error {
+func ListJSON(ctx context.Context, fsrc fs.Fs, remote string, opt *ListJSONOpt, callback func(*ListJSONItem) error) error {
 	var cipher crypt.Cipher
 	if opt.ShowEncrypted {
 		fsInfo, _, _, config, err := fs.ConfigFs(fsrc.Name() + ":" + fsrc.Root())
@@ -91,7 +92,7 @@ func ListJSON(fsrc fs.Fs, remote string, opt *ListJSONOpt, callback func(*ListJS
 		}
 	}
 	format := formatForPrecision(fsrc.Precision())
-	err := walk.ListR(fsrc, remote, false, ConfigMaxDepth(opt.Recurse), walk.ListAll, func(entries fs.DirEntries) (err error) {
+	err := walk.ListR(ctx, fsrc, remote, false, ConfigMaxDepth(opt.Recurse), walk.ListAll, func(entries fs.DirEntries) (err error) {
 		for _, entry := range entries {
 			switch entry.(type) {
 			case fs.Directory:
@@ -110,10 +111,10 @@ func ListJSON(fsrc fs.Fs, remote string, opt *ListJSONOpt, callback func(*ListJS
 				Path:     entry.Remote(),
 				Name:     path.Base(entry.Remote()),
 				Size:     entry.Size(),
-				MimeType: fs.MimeTypeDirEntry(entry),
+				MimeType: fs.MimeTypeDirEntry(ctx, entry),
 			}
 			if !opt.NoModTime {
-				item.ModTime = Timestamp{When: entry.ModTime(), Format: format}
+				item.ModTime = Timestamp{When: entry.ModTime(ctx), Format: format}
 			}
 			if cipher != nil {
 				switch entry.(type) {
@@ -153,7 +154,7 @@ func ListJSON(fsrc fs.Fs, remote string, opt *ListJSONOpt, callback func(*ListJS
 				if opt.ShowHash {
 					item.Hashes = make(map[string]string)
 					for _, hashType := range x.Fs().Hashes().Array() {
-						hash, err := x.Hash(hashType)
+						hash, err := x.Hash(ctx, hashType)
 						if err != nil {
 							fs.Errorf(x, "Failed to read hash: %v", err)
 						} else if hash != "" {

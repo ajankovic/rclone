@@ -330,6 +330,7 @@ func shellExpand(s string) string {
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
+	ctx := context.Background()
 	// Parse config into Options struct
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
@@ -427,12 +428,12 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		sshConfig.Auth = append(sshConfig.Auth, ssh.Password(clearpass))
 	}
 
-	return NewFsWithConnection(name, root, opt, sshConfig)
+	return NewFsWithConnection(ctx, name, root, opt, sshConfig)
 }
 
 // NewFsWithConnection creates a new Fs object from the name and root and a ssh.ClientConfig. It connects to
 // the host specified in the ssh.ClientConfig
-func NewFsWithConnection(name string, root string, opt *Options, sshConfig *ssh.ClientConfig) (fs.Fs, error) {
+func NewFsWithConnection(ctx context.Context, name string, root string, opt *Options, sshConfig *ssh.ClientConfig) (fs.Fs, error) {
 	f := &Fs{
 		name:      name,
 		root:      root,
@@ -458,7 +459,7 @@ func NewFsWithConnection(name string, root string, opt *Options, sshConfig *ssh.
 		if f.root == "." {
 			f.root = ""
 		}
-		_, err := f.NewObject(remote)
+		_, err := f.NewObject(ctx, remote)
 		if err != nil {
 			if err == fs.ErrorObjectNotFound || errors.Cause(err) == fs.ErrorNotAFile {
 				// File doesn't exist so return old f
@@ -499,7 +500,7 @@ func (f *Fs) Precision() time.Duration {
 }
 
 // NewObject creates a new remote sftp file object
-func (f *Fs) NewObject(remote string) (fs.Object, error) {
+func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	o := &Object{
 		fs:     f,
 		remote: remote,
@@ -544,7 +545,7 @@ func (f *Fs) dirExists(dir string) (bool, error) {
 //
 // This should return ErrDirNotFound if the directory isn't
 // found.
-func (f *Fs) List(dir string) (entries fs.DirEntries, err error) {
+func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 	root := path.Join(f.root, dir)
 	ok, err := f.dirExists(root)
 	if err != nil {
@@ -595,8 +596,8 @@ func (f *Fs) List(dir string) (entries fs.DirEntries, err error) {
 	return entries, nil
 }
 
-// Put data from <in> into a new remote sftp file object described by <src.Remote()> and <src.ModTime()>
-func (f *Fs) Put(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+// Put data from <in> into a new remote sftp file object described by <src.Remote()> and <src.ModTime(ctx)>
+func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	err := f.mkParentDir(src.Remote())
 	if err != nil {
 		return nil, errors.Wrap(err, "Put mkParentDir failed")
@@ -606,7 +607,7 @@ func (f *Fs) Put(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.
 		fs:     f,
 		remote: src.Remote(),
 	}
-	err = o.Update(in, src, options...)
+	err = o.Update(ctx, in, src, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -614,8 +615,8 @@ func (f *Fs) Put(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.
 }
 
 // PutStream uploads to the remote path with the modTime given of indeterminate size
-func (f *Fs) PutStream(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-	return f.Put(in, src, options...)
+func (f *Fs) PutStream(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+	return f.Put(ctx, in, src, options...)
 }
 
 // mkParentDir makes the parent of remote if necessary and any
@@ -657,16 +658,16 @@ func (f *Fs) mkdir(dirPath string) error {
 }
 
 // Mkdir makes the root directory of the Fs object
-func (f *Fs) Mkdir(dir string) error {
+func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	root := path.Join(f.root, dir)
 	return f.mkdir(root)
 }
 
 // Rmdir removes the root directory of the Fs object
-func (f *Fs) Rmdir(dir string) error {
+func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	// Check to see if directory is empty as some servers will
 	// delete recursively with RemoveDirectory
-	entries, err := f.List(dir)
+	entries, err := f.List(ctx, dir)
 	if err != nil {
 		return errors.Wrap(err, "Rmdir")
 	}
@@ -685,7 +686,7 @@ func (f *Fs) Rmdir(dir string) error {
 }
 
 // Move renames a remote sftp file object
-func (f *Fs) Move(src fs.Object, remote string) (fs.Object, error) {
+func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
 	srcObj, ok := src.(*Object)
 	if !ok {
 		fs.Debugf(src, "Can't move - not same remote type")
@@ -707,7 +708,7 @@ func (f *Fs) Move(src fs.Object, remote string) (fs.Object, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "Move Rename failed")
 	}
-	dstObj, err := f.NewObject(remote)
+	dstObj, err := f.NewObject(ctx, remote)
 	if err != nil {
 		return nil, errors.Wrap(err, "Move NewObject failed")
 	}
@@ -722,7 +723,7 @@ func (f *Fs) Move(src fs.Object, remote string) (fs.Object, error) {
 // If it isn't possible then return fs.ErrorCantDirMove
 //
 // If destination exists then return fs.ErrorDirExists
-func (f *Fs) DirMove(src fs.Fs, srcRemote, dstRemote string) error {
+func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string) error {
 	srcFs, ok := src.(*Fs)
 	if !ok {
 		fs.Debugf(srcFs, "Can't move directory - not same remote type")
@@ -833,7 +834,7 @@ func (o *Object) Remote() string {
 
 // Hash returns the selected checksum of the file
 // If no checksum is available it returns ""
-func (o *Object) Hash(r hash.Type) (string, error) {
+func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
 	var hashCmd string
 	if r == hash.MD5 {
 		if o.md5sum != nil {
@@ -909,7 +910,7 @@ func (o *Object) Size() int64 {
 }
 
 // ModTime returns the modification time of the remote sftp file
-func (o *Object) ModTime() time.Time {
+func (o *Object) ModTime(ctx context.Context) time.Time {
 	return o.modTime
 }
 
@@ -956,7 +957,7 @@ func (o *Object) stat() error {
 // SetModTime sets the modification and access time to the specified time
 //
 // it also updates the info field
-func (o *Object) SetModTime(modTime time.Time) error {
+func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	c, err := o.fs.getSftpConnection()
 	if err != nil {
 		return errors.Wrap(err, "SetModTime")
@@ -1027,7 +1028,7 @@ func (file *objectReader) Close() (err error) {
 }
 
 // Open a remote sftp file object for reading. Seek is supported
-func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
+func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	var offset, limit int64 = 0, -1
 	for _, option := range options {
 		switch x := option.(type) {
@@ -1061,7 +1062,7 @@ func (o *Object) Open(options ...fs.OpenOption) (in io.ReadCloser, err error) {
 }
 
 // Update a remote sftp file using the data <in> and ModTime from <src>
-func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
+func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	// Clear the hash cache since we are about to update the object
 	o.md5sum = nil
 	o.sha1sum = nil
@@ -1099,7 +1100,7 @@ func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOptio
 		remove()
 		return errors.Wrap(err, "Update Close failed")
 	}
-	err = o.SetModTime(src.ModTime())
+	err = o.SetModTime(ctx, src.ModTime(ctx))
 	if err != nil {
 		return errors.Wrap(err, "Update SetModTime failed")
 	}
@@ -1107,7 +1108,7 @@ func (o *Object) Update(in io.Reader, src fs.ObjectInfo, options ...fs.OpenOptio
 }
 
 // Remove a remote sftp file object
-func (o *Object) Remove() error {
+func (o *Object) Remove(ctx context.Context) error {
 	c, err := o.fs.getSftpConnection()
 	if err != nil {
 		return errors.Wrap(err, "Remove")
