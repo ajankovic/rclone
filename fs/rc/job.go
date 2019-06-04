@@ -30,6 +30,7 @@ type Job struct {
 	Duration  float64         `json:"duration"`
 	Output    Params          `json:"output"`
 	Context   context.Context `json:"-"`
+	Stop      func()          `json:"-"`
 }
 
 // Jobs describes a collection of running tasks
@@ -70,6 +71,7 @@ func (jobs *Jobs) Expire() {
 	now := time.Now()
 	for ID, job := range jobs.jobs {
 		job.mu.Lock()
+		job.Stop()
 		if job.Finished && now.Sub(job.EndTime) > expireDuration {
 			delete(jobs.jobs, ID)
 		}
@@ -134,10 +136,17 @@ func (job *Job) run(fn Func, in Params) {
 
 // NewJob start a new Job off
 func (jobs *Jobs) NewJob(fn Func, in Params) *Job {
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := func() {
+		cancel()
+		// Wait for cancel to propagate before returning.
+		<-ctx.Done()
+	}
 	job := &Job{
 		ID:        atomic.AddInt64(&jobID, 1),
 		StartTime: time.Now(),
-		Context:   context.Background(),
+		Context:   ctx,
+		Stop:      stop,
 	}
 	go job.run(fn, in)
 	jobs.mu.Lock()
@@ -211,9 +220,37 @@ Results
 	})
 }
 
-// Returns the status of a job
+// Returns list of job ids.
 func rcJobList(ctx context.Context, in Params) (out Params, err error) {
 	out = make(Params)
 	out["jobids"] = running.IDs()
+	return out, nil
+}
+
+func init() {
+	Add(Call{
+		Path:  "job/stop",
+		Fn:    rcJobStop,
+		Title: "Stop the running job",
+		Help: `Parameters
+- jobid - id of the job (integer)
+`,
+	})
+}
+
+// Stops the running job.
+func rcJobStop(ctx context.Context, in Params) (out Params, err error) {
+	jobID, err := in.GetInt64("jobid")
+	if err != nil {
+		return nil, err
+	}
+	job := running.Get(jobID)
+	if job == nil {
+		return nil, errors.New("job not found")
+	}
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	out = make(Params)
+	job.Stop()
 	return out, nil
 }
