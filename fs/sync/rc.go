@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 
+	"github.com/ncw/rclone/fs/accounting"
+	"github.com/ncw/rclone/fs/operations"
 	"github.com/ncw/rclone/fs/rc"
 )
 
@@ -24,6 +26,7 @@ func init() {
 
 - srcFs - a remote name string eg "drive:src" for the source
 - dstFs - a remote name string eg "drive:dst" for the destination
+- enableTransferGroups - enables alternative accounting stats for tracking all file transfers
 ` + moveHelp + `
 
 See the [` + name + ` command](/commands/rclone_` + name + `/) command for more information on the above.`,
@@ -44,6 +47,25 @@ func rcSyncCopyMove(ctx context.Context, in rc.Params, name string) (out rc.Para
 	createEmptySrcDirs, err := in.GetBool("createEmptySrcDirs")
 	if rc.NotErrParamNotFound(err) {
 		return nil, err
+	}
+	enableTransferGroups, err := in.GetBool("enableTransferGroups")
+	if rc.NotErrParamNotFound(err) {
+		return nil, err
+	}
+	if enableTransferGroups {
+		var opt operations.ListJSONOpt
+		opt.Recurse = true
+		opt.FilesOnly = true
+		err = in.GetStruct("opt", &opt)
+		if rc.NotErrParamNotFound(err) {
+			return nil, err
+		}
+		var fs []accounting.FileSize
+		err = operations.ListJSON(ctx, srcFs, "", &opt, func(item *operations.ListJSONItem) error {
+			fs = append(fs, accounting.FileSize{Name: item.Path, Size: item.Size})
+			return nil
+		})
+		accounting.Stats.GroupFiles(ctx, fs)
 	}
 	switch name {
 	case "sync":

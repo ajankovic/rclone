@@ -2,6 +2,7 @@
 package accounting
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -31,23 +32,24 @@ type Account struct {
 	close   io.Closer
 	size    int64
 	name    string
-	statmu  sync.Mutex    // Separate mutex for stat values.
-	bytes   int64         // Total number of bytes read
-	max     int64         // if >=0 the max number of bytes to transfer
-	start   time.Time     // Start time of first read
-	lpTime  time.Time     // Time of last average measurement
-	lpBytes int           // Number of bytes read since last measurement
-	avg     float64       // Moving average of last few measurements in bytes/s
-	closed  bool          // set if the file is closed
-	exit    chan struct{} // channel that will be closed when transfer is finished
-	withBuf bool          // is using a buffered in
+	statmu  sync.Mutex      // Separate mutex for stat values.
+	bytes   int64           // Total number of bytes read
+	max     int64           // if >=0 the max number of bytes to transfer
+	start   time.Time       // Start time of first read
+	lpTime  time.Time       // Time of last average measurement
+	lpBytes int             // Number of bytes read since last measurement
+	avg     float64         // Moving average of last few measurements in bytes/s
+	closed  bool            // set if the file is closed
+	exit    chan struct{}   // channel that will be closed when transfer is finished
+	withBuf bool            // is using a buffered in
+	ctx     context.Context // context which this account is being tracked in
 }
 
 const averagePeriod = 16 // period to do exponentially weighted averages over
 
 // NewAccountSizeName makes a Account reader for an io.ReadCloser of
 // the given size and name
-func NewAccountSizeName(in io.ReadCloser, size int64, name string) *Account {
+func NewAccountSizeName(ctx context.Context, in io.ReadCloser, size int64, name string) *Account {
 	acc := &Account{
 		in:     in,
 		close:  in,
@@ -58,6 +60,7 @@ func NewAccountSizeName(in io.ReadCloser, size int64, name string) *Account {
 		avg:    0,
 		lpTime: time.Now(),
 		max:    int64(fs.Config.MaxTransfer),
+		ctx:    ctx,
 	}
 	go acc.averageLoop()
 	Stats.inProgress.set(acc.name, acc)
@@ -65,8 +68,8 @@ func NewAccountSizeName(in io.ReadCloser, size int64, name string) *Account {
 }
 
 // NewAccount makes a Account reader for an object
-func NewAccount(in io.ReadCloser, obj fs.Object) *Account {
-	return NewAccountSizeName(in, obj.Size(), obj.Remote())
+func NewAccount(ctx context.Context, in io.ReadCloser, obj fs.Object) *Account {
+	return NewAccountSizeName(ctx, in, obj.Size(), obj.Remote())
 }
 
 // WithBuffer - If the file is above a certain size it adds an Async reader
@@ -176,6 +179,8 @@ func (acc *Account) read(in io.Reader, p []byte) (n int, err error) {
 	acc.statmu.Unlock()
 
 	Stats.Bytes(int64(n))
+
+	Stats.UpdateStats(acc.ctx, acc.name, acc.size, acc.bytes)
 
 	limitBandwidth(n)
 	return

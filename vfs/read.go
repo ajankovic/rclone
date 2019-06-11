@@ -70,7 +70,7 @@ func (fh *ReadFileHandle) openPending() (err error) {
 	if err != nil {
 		return err
 	}
-	fh.r = accounting.NewAccount(r, o).WithBuffer() // account the transfer
+	fh.r = accounting.NewAccount(context.TODO(), r, o).WithBuffer() // account the transfer
 	fh.opened = true
 	accounting.Stats.Transferring(o.Remote())
 	return nil

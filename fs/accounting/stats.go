@@ -89,6 +89,7 @@ type StatsInfo struct {
 	deletes           int64
 	start             time.Time
 	inProgress        *inProgress
+	groups            *groups
 }
 
 // NewStats cretates an initialised StatsInfo
@@ -98,6 +99,7 @@ func NewStats() *StatsInfo {
 		transferring: newStringSet(fs.Config.Transfers, "transferring"),
 		start:        time.Now(),
 		inProgress:   newInProgress(),
+		groups:       newGroups(),
 	}
 }
 
@@ -379,6 +381,8 @@ func (s *StatsInfo) ResetCounters() {
 	s.checks = 0
 	s.transfers = 0
 	s.deletes = 0
+	s.groups.Close()
+	s.groups = newGroups()
 }
 
 // ResetErrors sets the errors count to 0 and resets lastError, fatalError and retryError
@@ -489,4 +493,58 @@ func (s *StatsInfo) SetRenameQueue(n int, size int64) {
 	s.renameQueue = n
 	s.renameQueueSize = size
 	s.mu.Unlock()
+}
+
+// GroupFiles instructs stats object to track list of files together under
+// the group id extracted from the context.
+// To assign group id use WithGroupID on the context object.
+func (s *StatsInfo) GroupFiles(ctx context.Context, files []FileSize) {
+	group, ok := TransferGroupFromContext(ctx)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	if s.groups == nil {
+		s.groups = newGroups()
+	}
+	s.groups.TrackGroup(group, files)
+	s.mu.Unlock()
+}
+
+// ForgetGroup releases accounting information about the group.
+func (s *StatsInfo) ForgetGroup(group string) {
+	s.mu.RLock()
+	s.groups.RemoveGroup(group)
+	s.mu.RUnlock()
+}
+
+// UpdateStats is called whenever status of the file transfer has changed.
+func (s *StatsInfo) UpdateStats(ctx context.Context, name string, size, sent int64) {
+	group, ok := TransferGroupFromContext(ctx)
+	if !ok {
+		return
+	}
+	s.mu.RLock()
+	s.groups.Update(group, FileStatus{
+		Name: name,
+		Size: size,
+		Sent: sent,
+	})
+	s.mu.RUnlock()
+}
+
+// GroupStats returns file status information for the group.
+func (s *StatsInfo) GroupStats(group string) []FileStatus {
+	s.mu.RLock()
+	stats := s.groups.GroupStats(group)
+	s.mu.RUnlock()
+	var l []FileStatus
+	for i := range stats {
+		l = append(l, FileStatus{
+			Name: stats[i].Name,
+			Size: stats[i].Size,
+			Sent: stats[i].Sent,
+		})
+	}
+	return l
 }

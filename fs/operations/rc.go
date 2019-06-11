@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ncw/rclone/fs"
+	"github.com/ncw/rclone/fs/accounting"
 	"github.com/ncw/rclone/fs/rc"
 	"github.com/pkg/errors"
 )
@@ -117,6 +118,7 @@ func init() {
 - srcRemote - a path within that remote eg "file.txt" for the source
 - dstFs - a remote name string eg "drive2:" for the destination
 - dstRemote - a path within that remote eg "file2.txt" for the destination
+- enableTransferGroups - enables alternative accounting stats for tracking all file transfers
 `,
 		})
 	}
@@ -131,6 +133,19 @@ func rcMoveOrCopyFile(ctx context.Context, in rc.Params, cp bool) (out rc.Params
 	dstFs, dstRemote, err := rc.GetFsAndRemoteNamed(in, "dstFs", "dstRemote")
 	if err != nil {
 		return nil, err
+	}
+	enableTransferGroups, err := in.GetBool("enableTransferGroups")
+	if rc.NotErrParamNotFound(err) {
+		return nil, err
+	}
+	if enableTransferGroups {
+		o, err := srcFs.NewObject(ctx, srcRemote)
+		if err != nil {
+			return nil, err
+		}
+		accounting.Stats.GroupFiles(ctx, []accounting.FileSize{{
+			Name: o.Remote(),
+			Size: o.Size()}})
 	}
 	return nil, moveOrCopyFile(ctx, dstFs, srcFs, dstRemote, srcRemote, cp)
 }

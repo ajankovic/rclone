@@ -303,7 +303,7 @@ func Copy(ctx context.Context, f fs.Fs, dst fs.Object, remote string, src fs.Obj
 					dst, err = Rcat(ctx, f, remote, in0, src.ModTime(ctx))
 					newDst = dst
 				} else {
-					in := accounting.NewAccount(in0, src).WithBuffer() // account and buffer the transfer
+					in := accounting.NewAccount(ctx, in0, src).WithBuffer() // account and buffer the transfer
 					var wrappedSrc fs.ObjectInfo = src
 					// We try to pass the original object if possible
 					if src.Remote() != remote {
@@ -803,14 +803,14 @@ func CheckIdentical(ctx context.Context, dst, src fs.Object) (differ bool, err e
 	if err != nil {
 		return true, errors.Wrapf(err, "failed to open %q", dst)
 	}
-	in1 = accounting.NewAccount(in1, dst).WithBuffer() // account and buffer the transfer
+	in1 = accounting.NewAccount(ctx, in1, dst).WithBuffer() // account and buffer the transfer
 	defer fs.CheckClose(in1, &err)
 
 	in2, err := src.Open(ctx)
 	if err != nil {
 		return true, errors.Wrapf(err, "failed to open %q", src)
 	}
-	in2 = accounting.NewAccount(in2, src).WithBuffer() // account and buffer the transfer
+	in2 = accounting.NewAccount(ctx, in2, src).WithBuffer() // account and buffer the transfer
 	defer fs.CheckClose(in2, &err)
 
 	return CheckEqualReaders(in1, in2)
@@ -1134,7 +1134,7 @@ func Cat(ctx context.Context, f fs.Fs, w io.Writer, offset, count int64) error {
 				size = count
 			}
 		}
-		in = accounting.NewAccountSizeName(in, size, o.Remote()).WithBuffer() // account and buffer the transfer
+		in = accounting.NewAccountSizeName(ctx, in, size, o.Remote()).WithBuffer() // account and buffer the transfer
 		defer func() {
 			err = in.Close()
 			if err != nil {
@@ -1156,7 +1156,7 @@ func Cat(ctx context.Context, f fs.Fs, w io.Writer, offset, count int64) error {
 // Rcat reads data from the Reader until EOF and uploads it to a file on remote
 func Rcat(ctx context.Context, fdst fs.Fs, dstFileName string, in io.ReadCloser, modTime time.Time) (dst fs.Object, err error) {
 	accounting.Stats.Transferring(dstFileName)
-	in = accounting.NewAccountSizeName(in, -1, dstFileName).WithBuffer()
+	in = accounting.NewAccountSizeName(ctx, in, -1, dstFileName).WithBuffer()
 	defer func() {
 		accounting.Stats.DoneTransferring(dstFileName, err == nil)
 		if otherErr := in.Close(); otherErr != nil {
@@ -1319,6 +1319,7 @@ func NeedTransfer(ctx context.Context, dst, src fs.Object) bool {
 	// If we should ignore existing files, don't transfer
 	if fs.Config.IgnoreExisting {
 		fs.Debugf(src, "Destination exists, skipping")
+		accounting.Stats.UpdateStats(ctx, src.Remote(), src.Size(), src.Size())
 		return false
 	}
 	// If we should upload unconditionally
@@ -1342,12 +1343,14 @@ func NeedTransfer(ctx context.Context, dst, src fs.Object) bool {
 		switch {
 		case dt >= modifyWindow:
 			fs.Debugf(src, "Destination is newer than source, skipping")
+			accounting.Stats.UpdateStats(ctx, src.Remote(), src.Size(), src.Size())
 			return false
 		case dt <= -modifyWindow:
 			fs.Debugf(src, "Destination is older than source, transferring")
 		default:
 			if src.Size() == dst.Size() {
 				fs.Debugf(src, "Destination mod time is within %v of source and sizes identical, skipping", modifyWindow)
+				accounting.Stats.UpdateStats(ctx, src.Remote(), src.Size(), src.Size())
 				return false
 			}
 			fs.Debugf(src, "Destination mod time is within %v of source but sizes differ, transferring", modifyWindow)
@@ -1356,6 +1359,7 @@ func NeedTransfer(ctx context.Context, dst, src fs.Object) bool {
 		// Check to see if changed or not
 		if Equal(ctx, src, dst) {
 			fs.Debugf(src, "Unchanged skipping")
+			accounting.Stats.UpdateStats(ctx, src.Remote(), src.Size(), src.Size())
 			return false
 		}
 	}
@@ -1370,8 +1374,8 @@ func RcatSize(ctx context.Context, fdst fs.Fs, dstFileName string, in io.ReadClo
 	if size >= 0 {
 		// Size known use Put
 		accounting.Stats.Transferring(dstFileName)
-		body := ioutil.NopCloser(in)                                 // we let the server close the body
-		in := accounting.NewAccountSizeName(body, size, dstFileName) // account the transfer (no buffering)
+		body := ioutil.NopCloser(in)                                      // we let the server close the body
+		in := accounting.NewAccountSizeName(ctx, body, size, dstFileName) // account the transfer (no buffering)
 
 		if fs.Config.DryRun {
 			fs.Logf("stdin", "Not uploading as --dry-run")

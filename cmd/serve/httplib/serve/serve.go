@@ -76,7 +76,7 @@ func Object(w http.ResponseWriter, r *http.Request, o fs.Object) {
 		return
 	}
 	accounting.Stats.Transferring(o.Remote())
-	in := accounting.NewAccount(file, o) // account the transfer (no buffering)
+	in := accounting.NewAccount(r.Context(), file, o) // account the transfer (no buffering)
 	defer func() {
 		closeErr := in.Close()
 		if closeErr != nil {

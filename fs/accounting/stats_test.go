@@ -1,8 +1,10 @@
 package accounting
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,4 +118,58 @@ func TestStatsError(t *testing.T) {
 	assert.False(t, s.HadFatalError())
 	assert.False(t, s.HadRetryError())
 	assert.Equal(t, time.Time{}, s.RetryAfter())
+}
+
+func TestGroups(t *testing.T) {
+	var wg sync.WaitGroup
+	s := NewStats()
+	groupA := "A"
+	groupB := "B"
+
+	wg.Add(2)
+	go func() {
+		// Group A
+		defer wg.Done()
+		ctx := WithTransferGroup(context.Background(), groupA)
+		files := []FileSize{
+			{"file1", 10},
+			{"file2", 15},
+		}
+
+		s.GroupFiles(ctx, files)
+		s.UpdateStats(ctx, files[0].Name, files[0].Size, files[0].Size/2)
+		s.UpdateStats(ctx, files[0].Name, files[0].Size, files[0].Size)
+		s.UpdateStats(ctx, files[1].Name, files[1].Size, files[1].Size/2)
+
+	}()
+
+	go func() {
+		// Group B
+		defer wg.Done()
+		ctx := WithTransferGroup(context.Background(), groupB)
+		files := []FileSize{
+			{"file1", 10},
+			{"file3", 17},
+		}
+		s.GroupFiles(ctx, files)
+		s.UpdateStats(ctx, files[0].Name, files[0].Size, files[0].Size/2)
+		s.UpdateStats(ctx, files[1].Name, files[1].Size, files[1].Size/2)
+	}()
+
+	// Wait for updates to be processed
+	wg.Wait()
+	time.Sleep(5 * time.Millisecond)
+
+	statsA := s.GroupStats(groupA)
+	statsB := s.GroupStats(groupB)
+	expectedA := []FileStatus{
+		{"file1", 10, 10},
+		{"file2", 15, 7},
+	}
+	expectedB := []FileStatus{
+		{"file1", 10, 5},
+		{"file3", 17, 8},
+	}
+	assert.EqualValues(t, expectedA, statsA, "group A")
+	assert.EqualValues(t, expectedB, statsB, "group B")
 }
