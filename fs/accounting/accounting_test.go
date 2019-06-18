@@ -29,10 +29,8 @@ func TestNewAccountSizeName(t *testing.T) {
 	in := ioutil.NopCloser(bytes.NewBuffer([]byte{1}))
 	acc := NewAccountSizeName(in, 1, "test")
 	assert.Equal(t, in, acc.in)
-	assert.Equal(t, acc, Stats.inProgress.get("test"))
 	err := acc.Close()
 	assert.NoError(t, err)
-	assert.Nil(t, Stats.inProgress.get("test"))
 }
 
 func TestNewAccount(t *testing.T) {
@@ -40,16 +38,14 @@ func TestNewAccount(t *testing.T) {
 	in := ioutil.NopCloser(bytes.NewBuffer([]byte{1}))
 	acc := NewAccount(in, obj)
 	assert.Equal(t, in, acc.in)
-	assert.Equal(t, acc, Stats.inProgress.get("test"))
 	err := acc.Close()
 	assert.NoError(t, err)
-	assert.Nil(t, Stats.inProgress.get("test"))
 }
 
 func TestAccountWithBuffer(t *testing.T) {
 	in := ioutil.NopCloser(bytes.NewBuffer([]byte{1}))
 
-	acc := NewAccountSizeName(in, -1, "test")
+	acc := Stats.NewAccountSizeName(in, -1, "test")
 	acc.WithBuffer()
 	// should have a buffer for an unknown size
 	_, ok := acc.in.(*asyncreader.AsyncReader)

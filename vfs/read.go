@@ -69,7 +69,7 @@ func (fh *ReadFileHandle) openPending() (err error) {
 	if err != nil {
 		return err
 	}
-	fh.r = accounting.NewAccount(r, o).WithBuffer() // account the transfer
+	fh.r = accounting.Stats.NewAccount(r, o).WithBuffer() // account the transfer
 	fh.opened = true
 	accounting.Stats.Transferring(o.Remote())
 	return nil
@@ -346,7 +346,7 @@ func (fh *ReadFileHandle) close() error {
 	fh.closed = true
 
 	if fh.opened {
-		accounting.Stats.DoneTransferring(fh.remote, true)
+		accounting.Stats.DoneTransferring(fh.remote, nil)
 		// Close first so that we have hashes
 		err := fh.r.Close()
 		if err != nil {

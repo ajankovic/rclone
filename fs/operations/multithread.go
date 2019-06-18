@@ -132,7 +132,7 @@ func multiThreadCopy(f fs.Fs, remote string, src fs.Object, streams int) (newDst
 	mc.calculateChunks()
 
 	// Make accounting
-	mc.acc = accounting.NewAccount(nil, src)
+	mc.acc = accounting.Stats.NewAccount(nil, src)
 	defer fs.CheckClose(mc.acc, &err)
 
 	// create write file handle

@@ -18,6 +18,36 @@ import (
 // transfer limit is reached.
 var ErrorMaxTransferLimitReached = fserrors.FatalError(errors.New("Max transfer limit reached as set by --max-transfer"))
 
+// AccountSnapshot represents state of an account at point in time.
+type AccountSnapshot struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Bytes     int64  `json:"bytes"`
+	Checked   bool   `json:"checked"`
+	Timestamp msTime `json:"timestamp"`
+	Error     error  `json:"error"`
+}
+
+// NewCheckingSnapshot creates snapshot for checked object.
+func NewCheckingSnapshot(obj fs.Object) AccountSnapshot {
+	return AccountSnapshot{
+		Name:      obj.Remote(),
+		Size:      obj.Size(),
+		Bytes:     obj.Size(),
+		Checked:   true,
+		Timestamp: msTime(obj.ModTime()),
+	}
+}
+
+// NewNamedCheckingSnapshot creates snapshot for checked object.
+func NewNamedCheckingSnapshot(name string) AccountSnapshot {
+	return AccountSnapshot{
+		Name:      name,
+		Checked:   true,
+		Timestamp: msTime(time.Now().UTC()),
+	}
+}
+
 // Account limits and accounts for one transfer
 type Account struct {
 	// The mutex is to make sure Read() and Close() aren't called
@@ -60,7 +90,6 @@ func NewAccountSizeName(in io.ReadCloser, size int64, name string) *Account {
 		max:    int64(fs.Config.MaxTransfer),
 	}
 	go acc.averageLoop()
-	Stats.inProgress.set(acc.name, acc)
 	return acc
 }
 
@@ -219,7 +248,6 @@ func (acc *Account) Close() error {
 	}
 	acc.closed = true
 	close(acc.exit)
-	Stats.inProgress.clear(acc.name)
 	if acc.close == nil {
 		return nil
 	}
@@ -348,6 +376,17 @@ func (acc *Account) RemoteStats() (out map[string]interface{}) {
 	out["percentage"] = percentageDone
 
 	return out
+}
+
+// Snapshot produces stats for this account at point in time.
+func (acc *Account) Snapshot() AccountSnapshot {
+	a, b := acc.progress()
+	return AccountSnapshot{
+		Name:      acc.name,
+		Size:      b,
+		Bytes:     a,
+		Timestamp: msTime(time.Now().UTC()),
+	}
 }
 
 // OldStream returns the top io.Reader

@@ -1018,9 +1018,14 @@ func (f *Fs) purge(oldOnly bool) error {
 		go func() {
 			defer wg.Done()
 			for object := range toBeDeleted {
+				oi, err := f.newObjectWithInfo(object.Name, object)
 				accounting.Stats.Checking(object.Name)
 				checkErr(f.deleteByID(object.ID, object.Name))
-				accounting.Stats.DoneChecking(object.Name)
+				if err != nil {
+					accounting.Stats.DoneChecking(object.Name)
+				} else {
+					accounting.Stats.DoneCheckingObj(oi)
+				}
 			}
 		}()
 	}
@@ -1043,7 +1048,12 @@ func (f *Fs) purge(oldOnly bool) error {
 				toBeDeleted <- object
 			}
 			last = remote
-			accounting.Stats.DoneChecking(remote)
+			oi, err := f.newObjectWithInfo(object.Name, object)
+			if err != nil {
+				accounting.Stats.DoneChecking(remote)
+			} else {
+				accounting.Stats.DoneCheckingObj(oi)
+			}
 		}
 		return nil
 	}))

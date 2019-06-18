@@ -3,6 +3,7 @@ package accounting
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,37 @@ Values for "transferring", "checking" and "lastError" are only assigned if data 
 The value for "eta" is null if an eta cannot be determined.
 `,
 	})
+
+	rc.Add(rc.Call{
+		Path:  "core/transferred",
+		Fn:    Stats.Transferred,
+		Title: "Returns stats about completed transfers.",
+		Help: `
+This returns all available stats
+
+	rclone rc core/transferred
+
+Returns the following values:
+
+` + "```" + `
+{
+	"transferred":  an array of completed transfers (including failed ones):
+		[
+			{
+				"name": name of the file,
+				"size": size of the file in bytes,
+				"bytes": total transferred bytes for this file,
+				"checked": if the transfer is only checked (skipped, deleted),
+				"timestamp": integer representing millisecond unix epoch,
+				"error": string description of the error (empty if successfull)
+			}
+		]
+}
+` + "```" + `
+List is checked for outdated items periodically. Configuration for this checks are
+--accounting-transferred-expire-interval and --accounting-transferred-expire-duration
+`,
+	})
 }
 
 // StatsInfo accounts all transfers
@@ -88,6 +120,7 @@ type StatsInfo struct {
 	deletes           int64
 	start             time.Time
 	inProgress        *inProgress
+	transferred       *transferred
 }
 
 // NewStats creates an initialised StatsInfo
@@ -95,6 +128,7 @@ func NewStats() *StatsInfo {
 	return &StatsInfo{
 		checking:     newStringSet(fs.Config.Checkers, "checking"),
 		transferring: newStringSet(fs.Config.Transfers, "transferring"),
+		transferred:  newTransferred(),
 		start:        time.Now(),
 		inProgress:   newInProgress(),
 	}
@@ -145,6 +179,15 @@ func (s *StatsInfo) RemoteStats(in rc.Params) (out rc.Params, err error) {
 	if s.errors > 0 {
 		out["lastError"] = s.lastError
 	}
+	return out, nil
+}
+
+// Transferred returns stats for completed transfers including failed ones.
+func (s *StatsInfo) Transferred(in rc.Params) (out rc.Params, err error) {
+	out = make(rc.Params)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out["transferred"] = s.transferred.snapshots()
 	return out, nil
 }
 
@@ -384,6 +427,8 @@ func (s *StatsInfo) ResetCounters() {
 	s.checks = 0
 	s.transfers = 0
 	s.deletes = 0
+	s.transferred.close()
+	s.transferred = newTransferred()
 }
 
 // ResetErrors sets the errors count to 0 and resets lastError, fatalError and retryError
@@ -440,9 +485,21 @@ func (s *StatsInfo) Checking(remote string) {
 	s.checking.add(remote)
 }
 
-// DoneChecking removes a check from the stats
+// DoneChecking removes a check from the stats and adds empty entry to
+// transferred.
 func (s *StatsInfo) DoneChecking(remote string) {
 	s.checking.del(remote)
+	s.transferred.add(NewNamedCheckingSnapshot(remote))
+	s.mu.Lock()
+	s.checks++
+	s.mu.Unlock()
+}
+
+// DoneCheckingObj removes a check from the stats and adds entry to
+// transferred.
+func (s *StatsInfo) DoneCheckingObj(obj fs.Object) {
+	s.checking.del(obj.Remote())
+	s.transferred.add(NewCheckingSnapshot(obj))
 	s.mu.Lock()
 	s.checks++
 	s.mu.Unlock()
@@ -463,13 +520,28 @@ func (s *StatsInfo) Transferring(remote string) {
 // DoneTransferring removes a transfer from the stats
 //
 // if ok is true then it increments the transfers count
-func (s *StatsInfo) DoneTransferring(remote string, ok bool) {
+func (s *StatsInfo) DoneTransferring(remote string, err error) {
+	if err != nil {
+		s.Error(err)
+	}
 	s.transferring.del(remote)
-	if ok {
+	acc := s.inProgress.get(remote)
+	if acc != nil {
+		if err := acc.Close(); err != nil {
+			fs.LogLevelPrintf(fs.Config.StatsLogLevel, nil, "can't close account: %+v\n", err)
+		}
+		snap := acc.Snapshot()
+		if err != nil {
+			snap.Error = err
+		}
+		s.transferred.add(snap)
+	}
+	if err == nil {
 		s.mu.Lock()
 		s.transfers++
 		s.mu.Unlock()
 	}
+	s.inProgress.clear(remote)
 }
 
 // SetCheckQueue sets the number of queued checks
@@ -494,4 +566,18 @@ func (s *StatsInfo) SetRenameQueue(n int, size int64) {
 	s.renameQueue = n
 	s.renameQueueSize = size
 	s.mu.Unlock()
+}
+
+// NewAccountSizeName makes an Account reader for an io.ReadCloser of the given
+// size and name which is registered with the StatsInfo.
+func (s *StatsInfo) NewAccountSizeName(in io.ReadCloser, size int64, name string) *Account {
+	acc := NewAccountSizeName(in, size, name)
+	s.inProgress.set(acc.name, acc)
+	return acc
+}
+
+// NewAccount makes an Account reader for an object and registers it with
+// StatsInfo.
+func (s *StatsInfo) NewAccount(in io.ReadCloser, obj fs.Object) *Account {
+	return s.NewAccountSizeName(in, obj.Size(), obj.Remote())
 }

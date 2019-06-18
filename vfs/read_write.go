@@ -88,7 +88,7 @@ func copyObj(f fs.Fs, dst fs.Object, remote string, src fs.Object) (newDst fs.Ob
 	if operations.NeedTransfer(dst, src) {
 		accounting.Stats.Transferring(src.Remote())
 		newDst, err = operations.Copy(f, dst, remote, src)
-		accounting.Stats.DoneTransferring(src.Remote(), err == nil)
+		accounting.Stats.DoneTransferring(src.Remote(), err)
 	} else {
 		newDst = dst
 	}

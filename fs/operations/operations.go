@@ -253,7 +253,7 @@ var _ fs.MimeTyper = (*overrideRemoteObject)(nil)
 func Copy(f fs.Fs, dst fs.Object, remote string, src fs.Object) (newDst fs.Object, err error) {
 	accounting.Stats.Transferring(src.Remote())
 	defer func() {
-		accounting.Stats.DoneTransferring(src.Remote(), err == nil)
+		accounting.Stats.DoneTransferring(src.Remote(), err)
 	}()
 	newDst = dst
 	if fs.Config.DryRun {
@@ -326,7 +326,7 @@ func Copy(f fs.Fs, dst fs.Object, remote string, src fs.Object) (newDst fs.Objec
 						dst, err = Rcat(f, remote, in0, src.ModTime())
 						newDst = dst
 					} else {
-						in := accounting.NewAccount(in0, src).WithBuffer() // account and buffer the transfer
+						in := accounting.Stats.NewAccount(in0, src).WithBuffer() // account and buffer the transfer
 						var wrappedSrc fs.ObjectInfo = src
 						// We try to pass the original object if possible
 						if src.Remote() != remote {
@@ -339,10 +339,8 @@ func Copy(f fs.Fs, dst fs.Object, remote string, src fs.Object) (newDst fs.Objec
 							actionTaken = "Copied (new)"
 							dst, err = f.Put(in, wrappedSrc, hashOption)
 						}
-						closeErr := in.Close()
 						if err == nil {
 							newDst = dst
-							err = closeErr
 						}
 					}
 				}
@@ -430,7 +428,7 @@ func SameObject(src, dst fs.Object) bool {
 func Move(fdst fs.Fs, dst fs.Object, remote string, src fs.Object) (newDst fs.Object, err error) {
 	accounting.Stats.Checking(src.Remote())
 	defer func() {
-		accounting.Stats.DoneChecking(src.Remote())
+		accounting.Stats.DoneCheckingObj(src)
 	}()
 	newDst = dst
 	if fs.Config.DryRun {
@@ -529,7 +527,7 @@ func DeleteFileWithBackupDir(dst fs.Object, backupDir fs.Fs) (err error) {
 	} else if !fs.Config.DryRun {
 		fs.Infof(dst, actioned)
 	}
-	accounting.Stats.DoneChecking(dst.Remote())
+	accounting.Stats.DoneCheckingObj(dst)
 	return err
 }
 
@@ -700,7 +698,7 @@ func (c *checkMarch) SrcOnly(src fs.DirEntry) (recurse bool) {
 // check to see if two objects are identical using the check function
 func (c *checkMarch) checkIdentical(dst, src fs.Object) (differ bool, noHash bool) {
 	accounting.Stats.Checking(src.Remote())
-	defer accounting.Stats.DoneChecking(src.Remote())
+	defer accounting.Stats.DoneCheckingObj(src)
 	if sizeDiffers(src, dst) {
 		err := errors.Errorf("Sizes differ")
 		fs.Errorf(src, "%v", err)
@@ -844,14 +842,14 @@ func CheckIdentical(dst, src fs.Object) (differ bool, err error) {
 	if err != nil {
 		return true, errors.Wrapf(err, "failed to open %q", dst)
 	}
-	in1 = accounting.NewAccount(in1, dst).WithBuffer() // account and buffer the transfer
+	in1 = accounting.Stats.NewAccount(in1, dst).WithBuffer() // account and buffer the transfer
 	defer fs.CheckClose(in1, &err)
 
 	in2, err := src.Open()
 	if err != nil {
 		return true, errors.Wrapf(err, "failed to open %q", src)
 	}
-	in2 = accounting.NewAccount(in2, src).WithBuffer() // account and buffer the transfer
+	in2 = accounting.Stats.NewAccount(in2, src).WithBuffer() // account and buffer the transfer
 	defer fs.CheckClose(in2, &err)
 
 	return CheckEqualReaders(in1, in2)
@@ -914,7 +912,7 @@ func ListLong(f fs.Fs, w io.Writer) error {
 	return ListFn(f, func(o fs.Object) {
 		accounting.Stats.Checking(o.Remote())
 		modTime := o.ModTime()
-		accounting.Stats.DoneChecking(o.Remote())
+		accounting.Stats.DoneCheckingObj(o)
 		syncFprintf(w, "%9d %s %s\n", o.Size(), modTime.Local().Format("2006-01-02 15:04:05.000000000"), o.Remote())
 	})
 }
@@ -952,7 +950,7 @@ func DropboxHashSum(f fs.Fs, w io.Writer) error {
 func hashSum(ht hash.Type, o fs.Object) string {
 	accounting.Stats.Checking(o.Remote())
 	sum, err := o.Hash(ht)
-	accounting.Stats.DoneChecking(o.Remote())
+	accounting.Stats.DoneCheckingObj(o)
 	if err == hash.ErrUnsupported {
 		sum = "UNSUPPORTED"
 	} else if err != nil {
@@ -1151,7 +1149,7 @@ func Cat(f fs.Fs, w io.Writer, offset, count int64) error {
 		var err error
 		accounting.Stats.Transferring(o.Remote())
 		defer func() {
-			accounting.Stats.DoneTransferring(o.Remote(), err == nil)
+			accounting.Stats.DoneTransferring(o.Remote(), err)
 		}()
 		opt := fs.RangeOption{Start: offset, End: -1}
 		size := o.Size()
@@ -1178,14 +1176,7 @@ func Cat(f fs.Fs, w io.Writer, offset, count int64) error {
 				size = count
 			}
 		}
-		in = accounting.NewAccountSizeName(in, size, o.Remote()).WithBuffer() // account and buffer the transfer
-		defer func() {
-			err = in.Close()
-			if err != nil {
-				fs.CountError(err)
-				fs.Errorf(o, "Failed to close: %v", err)
-			}
-		}()
+		in = accounting.Stats.NewAccountSizeName(in, size, o.Remote()).WithBuffer() // account and buffer the transfer
 		// take the lock just before we output stuff, so at the last possible moment
 		mu.Lock()
 		defer mu.Unlock()
@@ -1200,13 +1191,10 @@ func Cat(f fs.Fs, w io.Writer, offset, count int64) error {
 // Rcat reads data from the Reader until EOF and uploads it to a file on remote
 func Rcat(fdst fs.Fs, dstFileName string, in io.ReadCloser, modTime time.Time) (dst fs.Object, err error) {
 	accounting.Stats.Transferring(dstFileName)
-	in = accounting.NewAccountSizeName(in, -1, dstFileName).WithBuffer()
 	defer func() {
-		accounting.Stats.DoneTransferring(dstFileName, err == nil)
-		if otherErr := in.Close(); otherErr != nil {
-			fs.Debugf(fdst, "Rcat: failed to close source: %v", err)
-		}
+		accounting.Stats.DoneTransferring(dstFileName, err)
 	}()
+	in = accounting.Stats.NewAccountSizeName(in, -1, dstFileName).WithBuffer()
 
 	hashOption := &fs.HashesOption{Hashes: fdst.Hashes()}
 	hash, err := hash.NewMultiHasherTypes(fdst.Hashes())
@@ -1413,9 +1401,13 @@ func RcatSize(fdst fs.Fs, dstFileName string, in io.ReadCloser, size int64, modT
 
 	if size >= 0 {
 		// Size known use Put
+		var err error
 		accounting.Stats.Transferring(dstFileName)
-		body := ioutil.NopCloser(in)                                 // we let the server close the body
-		in := accounting.NewAccountSizeName(body, size, dstFileName) // account the transfer (no buffering)
+		defer func() {
+			accounting.Stats.DoneTransferring(dstFileName, err)
+		}()
+		body := ioutil.NopCloser(in)                                       // we let the server close the body
+		in := accounting.Stats.NewAccountSizeName(body, size, dstFileName) // account the transfer (no buffering)
 
 		if fs.Config.DryRun {
 			fs.Logf("stdin", "Not uploading as --dry-run")
@@ -1424,20 +1416,10 @@ func RcatSize(fdst fs.Fs, dstFileName string, in io.ReadCloser, size int64, modT
 			return nil, err
 		}
 
-		var err error
-		defer func() {
-			closeErr := in.Close()
-			if closeErr != nil {
-				accounting.Stats.Error(closeErr)
-				fs.Errorf(dstFileName, "Post request: close failed: %v", closeErr)
-			}
-			accounting.Stats.DoneTransferring(dstFileName, err == nil)
-		}()
 		info := object.NewStaticObjectInfo(dstFileName, modTime, size, true, nil, fdst)
 		obj, err = fdst.Put(in, info)
 		if err != nil {
 			fs.Errorf(dstFileName, "Post request put error: %v", err)
-
 			return nil, err
 		}
 	} else {
@@ -1511,11 +1493,11 @@ func moveOrCopyFile(fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName stri
 		accounting.Stats.Transferring(srcFileName)
 		tmpObj, err := Op(fdst, nil, tmpObjName, srcObj)
 		if err != nil {
-			accounting.Stats.DoneTransferring(srcFileName, false)
+			accounting.Stats.DoneTransferring(srcFileName, err)
 			return errors.Wrap(err, "error while moving file to temporary location")
 		}
 		_, err = Op(fdst, nil, dstFileName, tmpObj)
-		accounting.Stats.DoneTransferring(srcFileName, err == nil)
+		accounting.Stats.DoneTransferring(srcFileName, err)
 		return err
 	}
 
@@ -1539,10 +1521,10 @@ func moveOrCopyFile(fdst fs.Fs, fsrc fs.Fs, dstFileName string, srcFileName stri
 		_, err = Op(fdst, dstObj, dstFileName, srcObj)
 	} else {
 		accounting.Stats.Checking(srcFileName)
+		defer accounting.Stats.DoneCheckingObj(srcObj)
 		if !cp {
 			err = DeleteFile(srcObj)
 		}
-		defer accounting.Stats.DoneChecking(srcFileName)
 	}
 	return err
 }

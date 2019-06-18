@@ -215,7 +215,7 @@ func (d *Driver) ListDir(path string, callback func(ftp.FileInfo) error) (err er
 
 	// Account the transfer
 	accounting.Stats.Transferring(path)
-	defer accounting.Stats.DoneTransferring(path, true)
+	defer accounting.Stats.DoneTransferring(path, nil)
 
 	for _, file := range dirEntries {
 		err = callback(&FileInfo{file, file.Mode(), d.vfs.Opt.UID, d.vfs.Opt.GID})
@@ -312,7 +312,7 @@ func (d *Driver) GetFile(path string, offset int64) (size int64, fr io.ReadClose
 
 	// Account the transfer
 	accounting.Stats.Transferring(path)
-	defer accounting.Stats.DoneTransferring(path, true)
+	defer accounting.Stats.DoneTransferring(path, nil)
 
 	return node.Size(), handle, nil
 }

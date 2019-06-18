@@ -76,7 +76,7 @@ func Error(what interface{}, w http.ResponseWriter, text string, err error) {
 func (d *Directory) Serve(w http.ResponseWriter, r *http.Request) {
 	// Account the transfer
 	accounting.Stats.Transferring(d.DirRemote)
-	defer accounting.Stats.DoneTransferring(d.DirRemote, true)
+	defer accounting.Stats.DoneTransferring(d.DirRemote, nil)
 
 	fs.Infof(d.DirRemote, "%s: Serving directory", r.RemoteAddr)
 
